@@ -1,0 +1,7 @@
+services:
+  miniflux-to-kindle:
+    build:
+      context: /home/jac/miniflux-to-kindle
+      dockerfile: Dockerfile
+    env_file: .env
+    restart: unless-stopped
