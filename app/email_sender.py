@@ -12,4 +12,21 @@ def send_epub(
     gmail_app_password: str,
     kindle_email: str,
 ) -> None:
-    pass
+    msg = MIMEMultipart()
+    msg['From'] = gmail_user
+    msg['To'] = kindle_email
+    msg['Subject'] = filename.replace('.epub', '')
+
+    msg.attach(MIMEText('Daily digest attached.', 'plain'))
+
+    attachment = MIMEBase('application', 'epub+zip')
+    attachment.set_payload(epub_bytes)
+    encoders.encode_base64(attachment)
+    attachment.add_header('Content-Disposition', 'attachment', filename=filename)
+    msg.attach(attachment)
+
+    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.login(gmail_user, gmail_app_password)
+        smtp.sendmail(gmail_user, kindle_email, msg.as_string())
