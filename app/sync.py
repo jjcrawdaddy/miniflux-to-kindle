@@ -38,6 +38,9 @@ def run_sync(
         logger.error("EPUB build failed: %s", exc)
         return
 
+    size_mb = len(epub_bytes) / 1024 / 1024
+    logger.info("EPUB size: %.1f MB", size_mb)
+
     try:
         send_epub(epub_bytes, filename, gmail_user, gmail_app_password, kindle_email)
         logger.info("Sent digest: %s", filename)
