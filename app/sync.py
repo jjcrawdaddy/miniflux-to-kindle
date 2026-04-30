@@ -47,6 +47,7 @@ def run_sync(
 
     all_ids = [e['id'] for e in all_entries]
     try:
+        # All clients share the same API key, so any client can mark entries from any feed
         clients[0].mark_entries_read(all_ids)
         logger.info("Marked %d entries as read", len(all_ids))
     except Exception as exc:

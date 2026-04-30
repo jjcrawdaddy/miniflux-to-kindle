@@ -1,3 +1,4 @@
+import html
 import os
 import tempfile
 from datetime import datetime
@@ -20,9 +21,11 @@ def build_epub(entries: list[dict], digest_date: str) -> bytes:
     for i, entry in enumerate(entries_sorted):
         file_name = f'article_{i:04d}.xhtml'
         chapter = epub.EpubHtml(title=entry['title'], file_name=file_name, lang='en')
+        safe_title = html.escape(entry['title'])
+        safe_url = html.escape(entry['url'], quote=True)
         chapter.content = (
-            f'<h1>{entry["title"]}</h1>'
-            f'<p><a href="{entry["url"]}">{entry["url"]}</a></p>'
+            f'<h1>{safe_title}</h1>'
+            f'<p><a href="{safe_url}">{safe_url}</a></p>'
             f'{entry["content"]}'
         )
         book.add_item(chapter)
