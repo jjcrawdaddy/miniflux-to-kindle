@@ -57,7 +57,7 @@ def test_load_config_raises_on_invalid_feed_ids():
 
 
 def test_load_config_raises_on_empty_feed_ids():
-    bad = {**FULL_ENV, 'MINIFLUX_FEED_IDS': ''}
+    bad = {**FULL_ENV, 'MINIFLUX_FEED_IDS': '   '}
     with patch.dict(os.environ, bad, clear=True):
         with pytest.raises(SystemExit) as exc:
             load_config()
