@@ -81,3 +81,14 @@ def test_run_sync_skips_failed_feed_and_continues():
         run_sync([c1, c2], 'u@gmail.com', 'pass', 'k@kindle.com')
 
     mock_epub.assert_called_once()
+
+
+def test_run_sync_logs_error_if_mark_read_fails():
+    client = MagicMock()
+    client.get_unread_entries.return_value = make_entries()
+    client.mark_entries_read.side_effect = Exception('Miniflux unavailable')
+
+    with patch('sync.build_epub', return_value=b'epub'), patch('sync.send_epub'):
+        run_sync([client], 'u@gmail.com', 'pass', 'k@kindle.com')
+
+    client.mark_entries_read.assert_called_once()
