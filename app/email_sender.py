@@ -1,3 +1,4 @@
+import os
 import smtplib
 from email import encoders
 from email.mime.base import MIMEBase
@@ -15,7 +16,7 @@ def send_epub(
     msg = MIMEMultipart()
     msg['From'] = gmail_user
     msg['To'] = kindle_email
-    msg['Subject'] = filename.replace('.epub', '')
+    msg['Subject'] = os.path.splitext(filename)[0]
 
     msg.attach(MIMEText('Daily digest attached.', 'plain'))
 
