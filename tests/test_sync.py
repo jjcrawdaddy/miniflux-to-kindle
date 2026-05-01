@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from sync import run_sync
+from sync import run_sync, refresh_feeds
 
 
 def make_entries(id_offset=0):
@@ -92,3 +92,17 @@ def test_run_sync_logs_error_if_mark_read_fails():
         run_sync([client], 'u@gmail.com', 'pass', 'k@kindle.com')
 
     client.mark_entries_read.assert_called_once()
+
+
+def test_refresh_feeds_calls_all_clients():
+    c1, c2 = MagicMock(), MagicMock()
+    refresh_feeds([c1, c2])
+    c1.refresh_feed.assert_called_once()
+    c2.refresh_feed.assert_called_once()
+
+
+def test_refresh_feeds_skips_failed_client():
+    c1, c2 = MagicMock(), MagicMock()
+    c1.refresh_feed.side_effect = Exception('timeout')
+    refresh_feeds([c1, c2])
+    c2.refresh_feed.assert_called_once()

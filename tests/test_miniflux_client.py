@@ -74,3 +74,16 @@ def test_mark_entries_read_skips_when_empty():
     client.mark_entries_read([])
 
     client.session.put.assert_not_called()
+
+
+def test_refresh_feed_sends_correct_request():
+    client = make_client()
+    mock_resp = MagicMock()
+    client.session.put = MagicMock(return_value=mock_resp)
+
+    client.refresh_feed()
+
+    client.session.put.assert_called_once_with(
+        'http://localhost:8080/v1/feeds/55/refresh'
+    )
+    mock_resp.raise_for_status.assert_called_once()

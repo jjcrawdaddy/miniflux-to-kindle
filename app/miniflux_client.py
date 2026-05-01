@@ -24,3 +24,7 @@ class MinifluxClient:
             json={'entry_ids': entry_ids, 'status': 'read'}
         )
         resp.raise_for_status()
+
+    def refresh_feed(self) -> None:
+        resp = self.session.put(f'{self._base_url}/v1/feeds/{self._feed_id}/refresh')
+        resp.raise_for_status()

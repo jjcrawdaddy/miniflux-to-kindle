@@ -1,11 +1,13 @@
 import logging
 import os
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import schedule
 
 from miniflux_client import MinifluxClient
-from sync import run_sync
+from sync import refresh_feeds, run_sync
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,12 @@ def load_config() -> dict:
     except ValueError:
         raise SystemExit(f"DIGEST_HOUR must be an integer 0–23, got: {digest_hour_str!r}")
 
+    timezone_str = os.environ.get('TIMEZONE', 'UTC')
+    try:
+        ZoneInfo(timezone_str)
+    except (KeyError, ZoneInfoNotFoundError):
+        raise SystemExit(f"TIMEZONE is not a valid IANA timezone: {timezone_str!r}")
+
     return {
         'miniflux_base_url': os.environ['MINIFLUX_BASE_URL'],
         'miniflux_api_key': os.environ['MINIFLUX_API_KEY'],
@@ -48,6 +56,7 @@ def load_config() -> dict:
         'gmail_app_password': os.environ['GMAIL_APP_PASSWORD'],
         'kindle_email': os.environ['KINDLE_EMAIL'],
         'digest_hour': digest_hour,
+        'timezone': timezone_str,
     }
 
 
@@ -59,6 +68,15 @@ def main() -> None:
         MinifluxClient(config['miniflux_base_url'], config['miniflux_api_key'], fid)
         for fid in config['feed_ids']
     ]
+
+    tz = ZoneInfo(config['timezone'])
+    local_digest = datetime.now(tz).replace(
+        hour=config['digest_hour'], minute=0, second=0, microsecond=0
+    )
+    utc_digest = local_digest.astimezone(ZoneInfo('UTC'))
+    utc_refresh = utc_digest - timedelta(minutes=3)
+    digest_time_str = utc_digest.strftime('%H:%M')
+    refresh_time_str = utc_refresh.strftime('%H:%M')
 
     def job() -> None:
         logger.info("Sync started")
@@ -74,8 +92,12 @@ def main() -> None:
         logger.info("Sync finished")
 
     job()
-    schedule.every().day.at(f"{config['digest_hour']:02d}:00").do(job)
-    logger.info("Scheduler running — next digest at %02d:00", config['digest_hour'])
+    schedule.every().day.at(refresh_time_str).do(lambda: refresh_feeds(clients))
+    schedule.every().day.at(digest_time_str).do(job)
+    logger.info(
+        "Scheduler running — digest at %02d:00 %s (%s UTC), refresh at %s UTC",
+        config['digest_hour'], config['timezone'], digest_time_str, refresh_time_str
+    )
 
     while True:
         schedule.run_pending()

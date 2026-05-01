@@ -25,6 +25,7 @@ def test_load_config_returns_all_values():
     assert config['gmail_app_password'] == 'apppass'
     assert config['kindle_email'] == 'kindle@kindle.com'
     assert config['digest_hour'] == 6
+    assert config['timezone'] == 'UTC'
 
 
 def test_load_config_parses_feed_ids_as_int_list():
@@ -78,3 +79,24 @@ def test_load_config_raises_on_non_integer_digest_hour():
         with pytest.raises(SystemExit) as exc:
             load_config()
     assert 'DIGEST_HOUR' in str(exc.value)
+
+
+def test_load_config_defaults_timezone_to_utc():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config['timezone'] == 'UTC'
+
+
+def test_load_config_uses_custom_timezone():
+    env = {**FULL_ENV, 'TIMEZONE': 'America/Chicago'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config['timezone'] == 'America/Chicago'
+
+
+def test_load_config_raises_on_invalid_timezone():
+    bad = {**FULL_ENV, 'TIMEZONE': 'Not/ATimezone'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'TIMEZONE' in str(exc.value)

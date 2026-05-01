@@ -8,6 +8,15 @@ from miniflux_client import MinifluxClient
 logger = logging.getLogger(__name__)
 
 
+def refresh_feeds(clients: list[MinifluxClient]) -> None:
+    for client in clients:
+        try:
+            client.refresh_feed()
+        except Exception as exc:
+            logger.error("Failed to refresh feed: %s", exc)
+    logger.info("Refreshed %d feeds", len(clients))
+
+
 def run_sync(
     clients: list[MinifluxClient],
     gmail_user: str,
