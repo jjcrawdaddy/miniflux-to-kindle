@@ -58,8 +58,13 @@ def build_epub(entries: list[dict], digest_date: str) -> bytes:
         embedded_content = _embed_images(book, entry['content'], seen_images)
         safe_title = html.escape(entry['title'])
         safe_url = html.escape(entry['url'], quote=True)
+        pub_date = datetime.fromisoformat(entry['published_at']).strftime('%B %-d, %Y')
+        byline_parts = [pub_date]
+        if entry.get('author'):
+            byline_parts.insert(0, f'By {html.escape(entry["author"])}')
         chapter.content = (
             f'<h1>{safe_title}</h1>'
+            f'<p><em>{" · ".join(byline_parts)}</em></p>'
             f'<p><a href="{safe_url}">{safe_url}</a></p>'
             f'{embedded_content}'
         )

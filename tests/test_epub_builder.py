@@ -62,6 +62,43 @@ def test_build_epub_handles_empty_entries():
     assert len(result) > 0
 
 
+def test_build_epub_includes_author_and_date_in_byline():
+    entries = [{
+        'id': 1,
+        'title': 'A',
+        'url': 'http://ex.com/1',
+        'content': '<p>Content</p>',
+        'author': 'Jane Smith',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        full_text = ' '.join(
+            zf.read(name).decode('utf-8', errors='ignore')
+            for name in zf.namelist()
+        )
+    assert 'Jane Smith' in full_text
+    assert 'April 30, 2026' in full_text
+
+
+def test_build_epub_shows_date_without_author_when_author_absent():
+    entries = [{
+        'id': 1,
+        'title': 'A',
+        'url': 'http://ex.com/1',
+        'content': '<p>Content</p>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        full_text = ' '.join(
+            zf.read(name).decode('utf-8', errors='ignore')
+            for name in zf.namelist()
+        )
+    assert 'April 30, 2026' in full_text
+    assert 'By' not in full_text
+
+
 def make_img_mock(content_type='image/jpeg', content=b'\xff\xd8\xff'):
     m = MagicMock()
     m.headers = {'Content-Type': content_type}
