@@ -38,11 +38,18 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
     return str(soup)
 
 
-def build_epub(entries: list[dict], digest_date: str) -> bytes:
-    entries_sorted = sorted(
-        entries,
-        key=lambda e: datetime.fromisoformat(e['published_at'])
-    )
+def build_epub(entries: list[dict], digest_date: str, feed_ids: list[int] | None = None) -> bytes:
+    if feed_ids:
+        feed_order = {fid: i for i, fid in enumerate(feed_ids)}
+        entries_sorted = sorted(
+            entries,
+            key=lambda e: (feed_order.get(e.get('feed_id', 0), len(feed_ids)), datetime.fromisoformat(e['published_at']))
+        )
+    else:
+        entries_sorted = sorted(
+            entries,
+            key=lambda e: datetime.fromisoformat(e['published_at'])
+        )
 
     book = epub.EpubBook()
     book.set_title(f'Daily Digest — {digest_date}')

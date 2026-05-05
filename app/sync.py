@@ -42,7 +42,8 @@ def run_sync(
     filename = f'digest-{digest_date}.epub'
 
     try:
-        epub_bytes = build_epub(all_entries, digest_date)
+        feed_ids = [c._feed_id for c in clients]
+        epub_bytes = build_epub(all_entries, digest_date, feed_ids=feed_ids)
     except Exception as exc:
         logger.error("EPUB build failed: %s", exc)
         return

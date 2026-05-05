@@ -99,6 +99,26 @@ def test_build_epub_shows_date_without_author_when_author_absent():
     assert 'By' not in full_text
 
 
+def test_build_epub_sorts_by_feed_id_order_then_date():
+    # feed 200 is listed first in feed_ids, so its articles come before feed 100
+    entries = [
+        {'id': 1, 'feed_id': 100, 'title': 'Feed100 Early', 'url': 'http://ex.com/1',
+         'content': '', 'published_at': '2026-04-30T07:00:00+00:00'},
+        {'id': 2, 'feed_id': 200, 'title': 'Feed200 Late', 'url': 'http://ex.com/2',
+         'content': '', 'published_at': '2026-04-30T09:00:00+00:00'},
+        {'id': 3, 'feed_id': 200, 'title': 'Feed200 Early', 'url': 'http://ex.com/3',
+         'content': '', 'published_at': '2026-04-30T08:00:00+00:00'},
+    ]
+    result = build_epub(entries, '2026-04-30', feed_ids=[200, 100])
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        first = [n for n in zf.namelist() if n.endswith('article_0000.xhtml')]
+        second = [n for n in zf.namelist() if n.endswith('article_0001.xhtml')]
+        first_text = zf.read(first[0]).decode('utf-8')
+        second_text = zf.read(second[0]).decode('utf-8')
+    assert 'Feed200 Early' in first_text
+    assert 'Feed200 Late' in second_text
+
+
 def make_img_mock(content_type='image/jpeg', content=b'\xff\xd8\xff'):
     m = MagicMock()
     m.headers = {'Content-Type': content_type}
