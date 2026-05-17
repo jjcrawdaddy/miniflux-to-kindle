@@ -1,6 +1,8 @@
 import hashlib
 import html
+import ipaddress
 import os
+import socket
 import tempfile
 from datetime import datetime
 from urllib.parse import urlparse
@@ -8,6 +10,22 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 from ebooklib import epub
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+
+def _is_public_url(url: str) -> bool:
+    hostname = urlparse(url).hostname
+    if not hostname:
+        return False
+    try:
+        for info in socket.getaddrinfo(hostname, None):
+            addr = ipaddress.ip_address(info[4][0])
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return False
+    except (socket.gaierror, ValueError):
+        return False
+    return True
 
 
 def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
@@ -21,15 +39,33 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
             img['src'] = seen[src]
             continue
         try:
-            resp = requests.get(src, timeout=10)
+            if not _is_public_url(src):
+                img.decompose()
+                continue
+            resp = requests.get(src, timeout=10, stream=True)
             resp.raise_for_status()
+            content_length = resp.headers.get('Content-Length')
+            if content_length and int(content_length) > MAX_IMAGE_BYTES:
+                img.decompose()
+                continue
+            chunks = []
+            size = 0
+            for chunk in resp.iter_content(8192):
+                size += len(chunk)
+                if size > MAX_IMAGE_BYTES:
+                    break
+                chunks.append(chunk)
+            if size > MAX_IMAGE_BYTES:
+                img.decompose()
+                continue
+            image_data = b''.join(chunks)
             media_type = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
             ext = os.path.splitext(urlparse(src).path)[1].lstrip('.').lower() or 'jpg'
             img_name = f'images/img_{hashlib.md5(src.encode()).hexdigest()[:8]}.{ext}'
             epub_img = epub.EpubImage()
             epub_img.file_name = img_name
             epub_img.media_type = media_type
-            epub_img.content = resp.content
+            epub_img.content = image_data
             book.add_item(epub_img)
             seen[src] = img_name
             img['src'] = img_name

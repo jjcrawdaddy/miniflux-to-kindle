@@ -121,8 +121,9 @@ def test_build_epub_sorts_by_feed_id_order_then_date():
 
 def make_img_mock(content_type='image/jpeg', content=b'\xff\xd8\xff'):
     m = MagicMock()
-    m.headers = {'Content-Type': content_type}
+    m.headers = {'Content-Type': content_type, 'Content-Length': str(len(content))}
     m.content = content
+    m.iter_content = lambda chunk_size=8192: [content]
     return m
 
 
@@ -132,7 +133,8 @@ def test_build_epub_embeds_image_from_content():
         'content': '<p><img src="http://ex.com/img.jpg" /></p>',
         'published_at': '2026-04-30T08:00:00+00:00',
     }]
-    with patch('epub_builder.requests.get', return_value=make_img_mock()):
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get', return_value=make_img_mock()):
         result = build_epub(entries, '2026-04-30')
     with zipfile.ZipFile(io.BytesIO(result)) as zf:
         image_files = [n for n in zf.namelist() if 'images/' in n]
@@ -164,6 +166,7 @@ def test_build_epub_deduplicates_images():
          'content': '<img src="http://ex.com/img.jpg" />',
          'published_at': '2026-04-30T09:00:00+00:00'},
     ]
-    with patch('epub_builder.requests.get', return_value=make_img_mock()) as mock_get:
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get', return_value=make_img_mock()) as mock_get:
         build_epub(entries, '2026-04-30')
     assert mock_get.call_count == 1
