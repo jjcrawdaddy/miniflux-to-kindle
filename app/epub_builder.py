@@ -13,6 +13,16 @@ from ebooklib import epub
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
+_MEDIA_TYPE_TO_EXT = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+    'image/bmp': 'bmp',
+}
+
 
 def _is_public_url(url: str) -> bool:
     hostname = urlparse(url).hostname
@@ -30,7 +40,15 @@ def _is_public_url(url: str) -> bool:
 
 def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
     soup = BeautifulSoup(content, 'html.parser')
+    for iframe in soup.find_all('iframe'):
+        src = iframe.get('src', '')
+        iframe.replace_with(f'[Video: {src}]' if src else '[Video]')
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        if href.startswith('#') and not soup.find(id=href[1:]):
+            a.unwrap()
     for img in soup.find_all('img'):
+        img.attrs.pop('srcset', None)
         src = img.get('src', '')
         if not src.startswith('http'):
             img.decompose()
@@ -44,6 +62,10 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
                 continue
             resp = requests.get(src, timeout=10, stream=True)
             resp.raise_for_status()
+            media_type = resp.headers.get('Content-Type', '').split(';')[0].strip()
+            if not media_type.startswith('image/'):
+                img.decompose()
+                continue
             content_length = resp.headers.get('Content-Length')
             if content_length and int(content_length) > MAX_IMAGE_BYTES:
                 img.decompose()
@@ -59,8 +81,7 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
                 img.decompose()
                 continue
             image_data = b''.join(chunks)
-            media_type = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
-            ext = os.path.splitext(urlparse(src).path)[1].lstrip('.').lower() or 'jpg'
+            ext = _MEDIA_TYPE_TO_EXT.get(media_type) or os.path.splitext(urlparse(src).path)[1].lstrip('.').lower() or 'jpg'
             img_name = f'images/img_{hashlib.md5(src.encode()).hexdigest()[:8]}.{ext}'
             epub_img = epub.EpubImage()
             epub_img.file_name = img_name
