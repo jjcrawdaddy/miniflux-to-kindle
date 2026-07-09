@@ -20,9 +20,10 @@ _MEDIA_TYPE_TO_EXT = {
     'image/png': 'png',
     'image/gif': 'gif',
     'image/webp': 'webp',
-    'image/svg+xml': 'svg',
     'image/bmp': 'bmp',
 }
+
+_SAFE_LINK_SCHEMES = ('', 'http', 'https', 'mailto')
 
 
 def _is_public_url(url: str, allowed_hosts: frozenset = frozenset()) -> bool:
@@ -63,12 +64,20 @@ def _fetch_image(src: str, allowed_hosts: frozenset) -> requests.Response | None
 
 def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: frozenset = frozenset()) -> str:
     soup = BeautifulSoup(content, 'html.parser')
+    for tag in soup(['script', 'style']):
+        tag.decompose()
+    for tag in soup.find_all(True):
+        for attr in list(tag.attrs):
+            if attr.lower().startswith('on'):
+                del tag.attrs[attr]
     for iframe in soup.find_all('iframe'):
         src = iframe.get('src', '')
         iframe.replace_with(f'[Video: {src}]' if src else '[Video]')
     for a in soup.find_all('a', href=True):
         href = a['href']
-        if href.startswith('#') and not soup.find(id=href[1:]):
+        if urlparse(href).scheme not in _SAFE_LINK_SCHEMES:
+            a.unwrap()
+        elif href.startswith('#') and not soup.find(id=href[1:]):
             a.unwrap()
     for img in soup.find_all('img'):
         img.attrs.pop('srcset', None)
@@ -85,7 +94,8 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: 
                 img.decompose()
                 continue
             media_type = resp.headers.get('Content-Type', '').split(';')[0].strip()
-            if not media_type.startswith('image/'):
+            # SVG can carry scripts and external references — reject it
+            if not media_type.startswith('image/') or media_type == 'image/svg+xml':
                 img.decompose()
                 continue
             content_length = resp.headers.get('Content-Length')

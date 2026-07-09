@@ -187,6 +187,54 @@ def test_build_epub_deduplicates_images():
     assert mock_get.call_count == 1
 
 
+def read_article(epub_bytes, index=0):
+    with zipfile.ZipFile(io.BytesIO(epub_bytes)) as zf:
+        name = [n for n in zf.namelist() if n.endswith(f'article_{index:04d}.xhtml')][0]
+        return zf.read(name).decode('utf-8')
+
+
+def test_build_epub_strips_scripts_styles_and_event_handlers():
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<p onclick="steal()">Hello</p><script>evil()</script><style>p{color:red}</style>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    article = read_article(build_epub(entries, '2026-04-30'))
+    assert 'Hello' in article
+    assert '<script' not in article
+    assert 'evil()' not in article
+    assert '<style' not in article
+    assert 'onclick' not in article
+
+
+def test_build_epub_unwraps_javascript_links():
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<a href="javascript:alert(1)">click me</a> <a href="http://ex.com/x">ok</a>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    article = read_article(build_epub(entries, '2026-04-30'))
+    assert 'javascript:' not in article
+    assert 'click me' in article
+    assert 'href="http://ex.com/x"' in article
+
+
+def test_build_epub_rejects_svg_images():
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<p><img src="http://ex.com/img.svg" /></p>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    svg = make_img_mock(content_type='image/svg+xml', content=b'<svg onload="evil()"/>')
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get', return_value=svg):
+        result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        image_files = [n for n in zf.namelist() if 'images/' in n]
+    assert not image_files
+    assert '<img' not in read_article(result)
+
+
 def test_is_public_url_allows_global_address():
     with patch('epub_builder.socket.getaddrinfo', return_value=make_addrinfo('93.184.216.34')):
         assert _is_public_url('http://example.com/img.jpg') is True
