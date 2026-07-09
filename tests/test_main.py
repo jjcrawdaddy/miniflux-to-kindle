@@ -1,9 +1,12 @@
+import dataclasses
 import os
 
 import pytest
-from unittest.mock import patch
+import schedule
+from unittest.mock import MagicMock, patch
 
-from main import load_config
+from config import Config, load_config
+from main import compute_schedule_times, setup_schedule
 
 FULL_ENV = {
     'MINIFLUX_BASE_URL': 'http://localhost:8080',
@@ -18,28 +21,35 @@ FULL_ENV = {
 def test_load_config_returns_all_values():
     with patch.dict(os.environ, FULL_ENV, clear=True):
         config = load_config()
-    assert config['miniflux_base_url'] == 'http://localhost:8080'
-    assert config['miniflux_api_key'] == 'mk'
-    assert config['feed_ids'] == [55, 12]
-    assert config['gmail_user'] == 'user@gmail.com'
-    assert config['gmail_app_password'] == 'apppass'
-    assert config['kindle_email'] == 'kindle@kindle.com'
-    assert config['digest_hour'] == 6
-    assert config['timezone'] == 'UTC'
+    assert config.miniflux_base_url == 'http://localhost:8080'
+    assert config.miniflux_api_key == 'mk'
+    assert config.feed_ids == (55, 12)
+    assert config.gmail_user == 'user@gmail.com'
+    assert config.gmail_app_password == 'apppass'
+    assert config.kindle_email == 'kindle@kindle.com'
+    assert config.digest_hour == 6
+    assert config.timezone == 'UTC'
 
 
-def test_load_config_parses_feed_ids_as_int_list():
+def test_load_config_is_immutable():
     with patch.dict(os.environ, FULL_ENV, clear=True):
         config = load_config()
-    assert isinstance(config['feed_ids'], list)
-    assert all(isinstance(x, int) for x in config['feed_ids'])
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.gmail_user = 'other@gmail.com'
+
+
+def test_load_config_parses_feed_ids_as_int_tuple():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert isinstance(config.feed_ids, tuple)
+    assert all(isinstance(x, int) for x in config.feed_ids)
 
 
 def test_load_config_uses_custom_digest_hour():
     env = {**FULL_ENV, 'DIGEST_HOUR': '8'}
     with patch.dict(os.environ, env, clear=True):
         config = load_config()
-    assert config['digest_hour'] == 8
+    assert config.digest_hour == 8
 
 
 def test_load_config_raises_on_missing_vars():
@@ -84,14 +94,14 @@ def test_load_config_raises_on_non_integer_digest_hour():
 def test_load_config_defaults_timezone_to_utc():
     with patch.dict(os.environ, FULL_ENV, clear=True):
         config = load_config()
-    assert config['timezone'] == 'UTC'
+    assert config.timezone == 'UTC'
 
 
 def test_load_config_uses_custom_timezone():
     env = {**FULL_ENV, 'TIMEZONE': 'America/Chicago'}
     with patch.dict(os.environ, env, clear=True):
         config = load_config()
-    assert config['timezone'] == 'America/Chicago'
+    assert config.timezone == 'America/Chicago'
 
 
 def test_load_config_raises_on_invalid_timezone():
@@ -100,3 +110,58 @@ def test_load_config_raises_on_invalid_timezone():
         with pytest.raises(SystemExit) as exc:
             load_config()
     assert 'TIMEZONE' in str(exc.value)
+
+
+def test_load_config_run_on_startup_defaults_true():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config.run_on_startup is True
+
+
+def test_load_config_run_on_startup_false():
+    env = {**FULL_ENV, 'RUN_ON_STARTUP': 'false'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.run_on_startup is False
+
+
+def test_load_config_raises_on_invalid_run_on_startup():
+    bad = {**FULL_ENV, 'RUN_ON_STARTUP': 'maybe'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'RUN_ON_STARTUP' in str(exc.value)
+
+
+def make_config(digest_hour=6, timezone='America/Chicago'):
+    return Config(
+        miniflux_base_url='http://miniflux.lan:8080',
+        miniflux_api_key='mk',
+        feed_ids=(55,),
+        gmail_user='u@gmail.com',
+        gmail_app_password='pass',
+        kindle_email='k@kindle.com',
+        digest_hour=digest_hour,
+        timezone=timezone,
+    )
+
+
+def test_compute_schedule_times_refresh_three_minutes_before_digest():
+    assert compute_schedule_times(6) == ('06:00', '05:57')
+
+
+def test_compute_schedule_times_wraps_around_midnight():
+    assert compute_schedule_times(0) == ('00:00', '23:57')
+
+
+def test_setup_schedule_registers_timezone_aware_jobs():
+    schedule.clear()
+    try:
+        setup_schedule(make_config(), MagicMock(), lambda: None)
+        assert len(schedule.jobs) == 2
+        for job in schedule.jobs:
+            # tz-aware jobs recompute next_run per day, so DST shifts are honored
+            assert str(job.at_time_zone) == 'America/Chicago'
+            assert job.next_run is not None
+    finally:
+        schedule.clear()

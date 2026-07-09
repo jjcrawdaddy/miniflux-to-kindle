@@ -4,7 +4,7 @@ from miniflux_client import MinifluxClient
 
 
 def make_client():
-    return MinifluxClient('http://localhost:8080', 'test-key', 55)
+    return MinifluxClient('http://localhost:8080', 'test-key')
 
 
 def test_get_unread_entries_returns_entries():
@@ -21,7 +21,7 @@ def test_get_unread_entries_returns_entries():
     }
     client.session.get = MagicMock(return_value=mock_resp)
 
-    entries = client.get_unread_entries()
+    entries = client.get_unread_entries(55)
 
     client.session.get.assert_called_once_with(
         'http://localhost:8080/v1/feeds/55/entries',
@@ -39,16 +39,16 @@ def test_get_unread_entries_returns_empty_list_when_none():
     mock_resp.json.return_value = {'total': 0, 'entries': []}
     client.session.get = MagicMock(return_value=mock_resp)
 
-    assert client.get_unread_entries() == []
+    assert client.get_unread_entries(55) == []
 
 
 def test_get_unread_entries_strips_trailing_slash():
-    client = MinifluxClient('http://localhost:8080/', 'test-key', 55)
+    client = MinifluxClient('http://localhost:8080/', 'test-key')
     mock_resp = MagicMock()
     mock_resp.json.return_value = {'total': 0, 'entries': []}
     client.session.get = MagicMock(return_value=mock_resp)
 
-    client.get_unread_entries()
+    client.get_unread_entries(55)
 
     args, _ = client.session.get.call_args
     assert args[0] == 'http://localhost:8080/v1/feeds/55/entries'
@@ -83,7 +83,7 @@ def test_refresh_feed_sends_correct_request():
     mock_resp = MagicMock()
     client.session.put = MagicMock(return_value=mock_resp)
 
-    client.refresh_feed()
+    client.refresh_feed(55)
 
     client.session.put.assert_called_once_with(
         'http://localhost:8080/v1/feeds/55/refresh',
@@ -99,9 +99,9 @@ def test_all_requests_include_timeout():
     client.session.get = MagicMock(return_value=mock_resp)
     client.session.put = MagicMock(return_value=MagicMock())
 
-    client.get_unread_entries()
+    client.get_unread_entries(55)
     client.mark_entries_read([1])
-    client.refresh_feed()
+    client.refresh_feed(55)
 
     assert client.session.get.call_args.kwargs['timeout'] == 30
     for call in client.session.put.call_args_list:
@@ -109,5 +109,5 @@ def test_all_requests_include_timeout():
 
 
 def test_client_exposes_hostname():
-    client = MinifluxClient('http://192.168.1.10:8080/', 'key', 55)
+    client = MinifluxClient('http://192.168.1.10:8080/', 'key')
     assert client.hostname == '192.168.1.10'
