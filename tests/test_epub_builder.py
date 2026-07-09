@@ -1,8 +1,9 @@
 import io
+import socket
 import zipfile
 from unittest.mock import MagicMock, patch
 
-from epub_builder import build_epub
+from epub_builder import build_epub, _fetch_image, _is_public_url
 
 ENTRIES = [
     {
@@ -124,7 +125,21 @@ def make_img_mock(content_type='image/jpeg', content=b'\xff\xd8\xff'):
     m.headers = {'Content-Type': content_type, 'Content-Length': str(len(content))}
     m.content = content
     m.iter_content = lambda chunk_size=8192: [content]
+    m.is_redirect = False
+    m.is_permanent_redirect = False
     return m
+
+
+def make_redirect_mock(location):
+    m = MagicMock()
+    m.is_redirect = True
+    m.is_permanent_redirect = False
+    m.headers = {'Location': location}
+    return m
+
+
+def make_addrinfo(ip):
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (ip, 0))]
 
 
 def test_build_epub_embeds_image_from_content():
@@ -170,3 +185,80 @@ def test_build_epub_deduplicates_images():
          patch('epub_builder.requests.get', return_value=make_img_mock()) as mock_get:
         build_epub(entries, '2026-04-30')
     assert mock_get.call_count == 1
+
+
+def test_is_public_url_allows_global_address():
+    with patch('epub_builder.socket.getaddrinfo', return_value=make_addrinfo('93.184.216.34')):
+        assert _is_public_url('http://example.com/img.jpg') is True
+
+
+def test_is_public_url_blocks_non_global_addresses():
+    # CGNAT, multicast, and unspecified are not private/loopback/link-local/reserved,
+    # but must still be blocked
+    for ip in ['100.64.1.1', '224.0.0.1', '0.0.0.0', '10.0.0.1', '127.0.0.1']:
+        with patch('epub_builder.socket.getaddrinfo', return_value=make_addrinfo(ip)):
+            assert _is_public_url('http://example.com/img.jpg') is False, ip
+
+
+def test_is_public_url_allows_allowlisted_host_without_resolving():
+    with patch('epub_builder.socket.getaddrinfo', side_effect=AssertionError('must not resolve')):
+        assert _is_public_url(
+            'http://miniflux.lan:8080/proxy/abc',
+            allowed_hosts=frozenset({'miniflux.lan'}),
+        ) is True
+
+
+def test_fetch_image_blocks_redirect_to_private_address():
+    def fake_public(url, allowed_hosts=frozenset()):
+        return 'internal' not in url
+
+    with patch('epub_builder._is_public_url', side_effect=fake_public), \
+         patch('epub_builder.requests.get',
+               return_value=make_redirect_mock('http://internal.lan/secret')) as mock_get:
+        result = _fetch_image('http://public.example/img.jpg', frozenset())
+    assert result is None
+    assert mock_get.call_count == 1
+
+
+def test_fetch_image_follows_public_redirect_without_auto_redirects():
+    final = make_img_mock()
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get',
+               side_effect=[make_redirect_mock('http://cdn.example/img.jpg'), final]) as mock_get:
+        result = _fetch_image('http://public.example/img.jpg', frozenset())
+    assert result is final
+    for call in mock_get.call_args_list:
+        assert call.kwargs['allow_redirects'] is False
+
+
+def test_fetch_image_gives_up_after_redirect_limit():
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get',
+               return_value=make_redirect_mock('http://public.example/loop.jpg')) as mock_get:
+        result = _fetch_image('http://public.example/img.jpg', frozenset())
+    assert result is None
+    assert mock_get.call_count <= 5
+
+
+def test_build_epub_removes_image_redirecting_to_private_host():
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<p><img src="http://ex.com/img.jpg" /></p>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+
+    def fake_public(url, allowed_hosts=frozenset()):
+        return '192.168.' not in url
+
+    with patch('epub_builder._is_public_url', side_effect=fake_public), \
+         patch('epub_builder.requests.get',
+               return_value=make_redirect_mock('http://192.168.1.1/admin')):
+        result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        full_text = ' '.join(
+            zf.read(name).decode('utf-8', errors='ignore')
+            for name in zf.namelist()
+        )
+        image_files = [n for n in zf.namelist() if 'images/' in n]
+    assert '<img' not in full_text
+    assert not image_files

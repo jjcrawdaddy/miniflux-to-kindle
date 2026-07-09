@@ -1,4 +1,8 @@
+from urllib.parse import urlparse
+
 import requests
+
+REQUEST_TIMEOUT = 30
 
 
 class MinifluxClient:
@@ -8,10 +12,15 @@ class MinifluxClient:
         self.session = requests.Session()
         self.session.headers['X-Auth-Token'] = api_key
 
+    @property
+    def hostname(self) -> str | None:
+        return urlparse(self._base_url).hostname
+
     def get_unread_entries(self) -> list[dict]:
         resp = self.session.get(
             f'{self._base_url}/v1/feeds/{self._feed_id}/entries',
-            params={'status': 'unread', 'limit': 100}
+            params={'status': 'unread', 'limit': 100},
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json().get('entries', [])
@@ -21,10 +30,14 @@ class MinifluxClient:
             return
         resp = self.session.put(
             f'{self._base_url}/v1/entries',
-            json={'entry_ids': entry_ids, 'status': 'read'}
+            json={'entry_ids': entry_ids, 'status': 'read'},
+            timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
 
     def refresh_feed(self) -> None:
-        resp = self.session.put(f'{self._base_url}/v1/feeds/{self._feed_id}/refresh')
+        resp = self.session.put(
+            f'{self._base_url}/v1/feeds/{self._feed_id}/refresh',
+            timeout=REQUEST_TIMEOUT,
+        )
         resp.raise_for_status()

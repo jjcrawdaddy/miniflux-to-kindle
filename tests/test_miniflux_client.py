@@ -25,7 +25,8 @@ def test_get_unread_entries_returns_entries():
 
     client.session.get.assert_called_once_with(
         'http://localhost:8080/v1/feeds/55/entries',
-        params={'status': 'unread', 'limit': 100}
+        params={'status': 'unread', 'limit': 100},
+        timeout=30,
     )
     assert len(entries) == 2
     assert entries[0]['id'] == 1
@@ -62,7 +63,8 @@ def test_mark_entries_read_sends_correct_request():
 
     client.session.put.assert_called_once_with(
         'http://localhost:8080/v1/entries',
-        json={'entry_ids': [1, 2, 3], 'status': 'read'}
+        json={'entry_ids': [1, 2, 3], 'status': 'read'},
+        timeout=30,
     )
     mock_resp.raise_for_status.assert_called_once()
 
@@ -84,6 +86,28 @@ def test_refresh_feed_sends_correct_request():
     client.refresh_feed()
 
     client.session.put.assert_called_once_with(
-        'http://localhost:8080/v1/feeds/55/refresh'
+        'http://localhost:8080/v1/feeds/55/refresh',
+        timeout=30,
     )
     mock_resp.raise_for_status.assert_called_once()
+
+
+def test_all_requests_include_timeout():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {'total': 0, 'entries': []}
+    client.session.get = MagicMock(return_value=mock_resp)
+    client.session.put = MagicMock(return_value=MagicMock())
+
+    client.get_unread_entries()
+    client.mark_entries_read([1])
+    client.refresh_feed()
+
+    assert client.session.get.call_args.kwargs['timeout'] == 30
+    for call in client.session.put.call_args_list:
+        assert call.kwargs['timeout'] == 30
+
+
+def test_client_exposes_hostname():
+    client = MinifluxClient('http://192.168.1.10:8080/', 'key', 55)
+    assert client.hostname == '192.168.1.10'

@@ -94,6 +94,17 @@ def test_run_sync_logs_error_if_mark_read_fails():
     client.mark_entries_read.assert_called_once()
 
 
+def test_run_sync_allowlists_miniflux_hosts_for_image_fetching():
+    client = MagicMock()
+    client.hostname = 'miniflux.lan'
+    client.get_unread_entries.return_value = make_entries()
+
+    with patch('sync.build_epub', return_value=b'epub') as mock_epub, patch('sync.send_epub'):
+        run_sync([client], 'u@gmail.com', 'pass', 'k@kindle.com')
+
+    assert mock_epub.call_args.kwargs['allowed_hosts'] == {'miniflux.lan'}
+
+
 def test_refresh_feeds_calls_all_clients():
     c1, c2 = MagicMock(), MagicMock()
     refresh_feeds([c1, c2])

@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,7 +23,7 @@ def test_send_epub_connects_to_gmail_smtp():
     smtp = mock_smtp()
     with patch('email_sender.smtplib.SMTP', return_value=smtp) as mock_cls:
         call_send()
-    mock_cls.assert_called_once_with('smtp.gmail.com', 587)
+    mock_cls.assert_called_once_with('smtp.gmail.com', 587, timeout=30)
 
 
 def test_send_epub_uses_starttls():
@@ -46,6 +47,23 @@ def test_send_epub_sends_to_kindle_address():
     args = smtp.sendmail.call_args[0]
     assert args[0] == 'user@gmail.com'
     assert args[1] == 'kindle@kindle.com'
+
+
+def test_send_epub_uses_verified_tls_context():
+    smtp = mock_smtp()
+    with patch('email_sender.smtplib.SMTP', return_value=smtp):
+        call_send()
+    ctx = smtp.starttls.call_args.kwargs['context']
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert ctx.check_hostname is True
+
+
+def test_send_epub_sets_connection_timeout():
+    smtp = mock_smtp()
+    with patch('email_sender.smtplib.SMTP', return_value=smtp) as mock_cls:
+        call_send()
+    assert mock_cls.call_args.kwargs['timeout'] == 30
 
 
 def test_send_epub_raises_on_auth_failure():

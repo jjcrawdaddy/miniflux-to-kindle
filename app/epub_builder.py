@@ -5,13 +5,14 @@ import os
 import socket
 import tempfile
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 from ebooklib import epub
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_REDIRECTS = 3
 
 _MEDIA_TYPE_TO_EXT = {
     'image/jpeg': 'jpg',
@@ -24,21 +25,43 @@ _MEDIA_TYPE_TO_EXT = {
 }
 
 
-def _is_public_url(url: str) -> bool:
+def _is_public_url(url: str, allowed_hosts: frozenset = frozenset()) -> bool:
     hostname = urlparse(url).hostname
     if not hostname:
         return False
+    if hostname in allowed_hosts:
+        return True
     try:
         for info in socket.getaddrinfo(hostname, None):
             addr = ipaddress.ip_address(info[4][0])
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            # is_global reports True for multicast, so check it separately
+            if addr.is_multicast or not addr.is_global:
                 return False
     except (socket.gaierror, ValueError):
         return False
     return True
 
 
-def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
+def _fetch_image(src: str, allowed_hosts: frozenset) -> requests.Response | None:
+    # Follow redirects manually so every hop gets the public-URL check,
+    # otherwise a public image URL could redirect to an internal address
+    url = src
+    for _ in range(MAX_REDIRECTS + 1):
+        if not _is_public_url(url, allowed_hosts):
+            return None
+        resp = requests.get(url, timeout=10, stream=True, allow_redirects=False)
+        if resp.is_redirect or resp.is_permanent_redirect:
+            location = resp.headers.get('Location')
+            if not location:
+                return None
+            url = urljoin(url, location)
+            continue
+        resp.raise_for_status()
+        return resp
+    return None
+
+
+def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: frozenset = frozenset()) -> str:
     soup = BeautifulSoup(content, 'html.parser')
     for iframe in soup.find_all('iframe'):
         src = iframe.get('src', '')
@@ -57,11 +80,10 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
             img['src'] = seen[src]
             continue
         try:
-            if not _is_public_url(src):
+            resp = _fetch_image(src, allowed_hosts)
+            if resp is None:
                 img.decompose()
                 continue
-            resp = requests.get(src, timeout=10, stream=True)
-            resp.raise_for_status()
             media_type = resp.headers.get('Content-Type', '').split(';')[0].strip()
             if not media_type.startswith('image/'):
                 img.decompose()
@@ -95,7 +117,12 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict) -> str:
     return str(soup)
 
 
-def build_epub(entries: list[dict], digest_date: str, feed_ids: list[int] | None = None) -> bytes:
+def build_epub(
+    entries: list[dict],
+    digest_date: str,
+    feed_ids: list[int] | None = None,
+    allowed_hosts: frozenset = frozenset(),
+) -> bytes:
     if feed_ids:
         feed_order = {fid: i for i, fid in enumerate(feed_ids)}
         entries_sorted = sorted(
@@ -119,7 +146,7 @@ def build_epub(entries: list[dict], digest_date: str, feed_ids: list[int] | None
     for i, entry in enumerate(entries_sorted):
         file_name = f'article_{i:04d}.xhtml'
         chapter = epub.EpubHtml(title=entry['title'], file_name=file_name, lang='en')
-        embedded_content = _embed_images(book, entry['content'], seen_images)
+        embedded_content = _embed_images(book, entry['content'], seen_images, allowed_hosts)
         safe_title = html.escape(entry['title'])
         safe_url = html.escape(entry['url'], quote=True)
         pub_date = datetime.fromisoformat(entry['published_at']).strftime('%B %-d, %Y')

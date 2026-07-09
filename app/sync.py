@@ -43,7 +43,12 @@ def run_sync(
 
     try:
         feed_ids = [c._feed_id for c in clients]
-        epub_bytes = build_epub(all_entries, digest_date, feed_ids=feed_ids)
+        # Miniflux may rewrite image URLs to its own media proxy, which can live
+        # at a private address — exempt it from the public-URL check
+        allowed_hosts = {c.hostname for c in clients}
+        epub_bytes = build_epub(
+            all_entries, digest_date, feed_ids=feed_ids, allowed_hosts=allowed_hosts
+        )
     except Exception as exc:
         logger.error("EPUB build failed: %s", exc)
         return

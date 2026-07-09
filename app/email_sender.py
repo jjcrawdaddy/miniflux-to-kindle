@@ -1,5 +1,6 @@
 import os
 import smtplib
+import ssl
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -26,8 +27,8 @@ def send_epub(
     attachment.add_header('Content-Disposition', 'attachment', filename=filename)
     msg.attach(attachment)
 
-    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as smtp:
         smtp.ehlo()
-        smtp.starttls()
+        smtp.starttls(context=ssl.create_default_context())
         smtp.login(gmail_user, gmail_app_password)
         smtp.sendmail(gmail_user, kindle_email, msg.as_string())
