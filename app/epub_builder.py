@@ -73,6 +73,8 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: 
     for iframe in soup.find_all('iframe'):
         src = iframe.get('src', '')
         iframe.replace_with(f'[Video: {src}]' if src else '[Video]')
+    for source in soup.find_all('source'):
+        source.decompose()
     for a in soup.find_all('a', href=True):
         href = a['href']
         if urlparse(href).scheme not in _SAFE_LINK_SCHEMES:
