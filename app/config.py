@@ -23,6 +23,7 @@ class Config:
     digest_hour: int
     timezone: str
     run_on_startup: bool = True
+    healthcheck_url: str | None = None
 
 
 def load_config() -> Config:
@@ -70,4 +71,5 @@ def load_config() -> Config:
         digest_hour=digest_hour,
         timezone=timezone_str,
         run_on_startup=run_on_startup,
+        healthcheck_url=os.environ.get('HEALTHCHECK_URL', '').rstrip('/') or None,
     )

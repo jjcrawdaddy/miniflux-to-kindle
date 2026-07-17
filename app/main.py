@@ -6,10 +6,26 @@ from typing import Callable
 import schedule
 
 from config import Config, load_config
+from healthcheck import ping
 from miniflux_client import MinifluxClient
 from sync import refresh_feeds, run_sync
 
 logger = logging.getLogger(__name__)
+
+
+def run_job(client: MinifluxClient, config: Config) -> None:
+    logger.info("Sync started")
+    ping(config.healthcheck_url, '/start')
+    try:
+        error = run_sync(client, config)
+    except Exception as exc:
+        logger.error("Sync cycle failed: %s", exc)
+        error = str(exc)
+    if error:
+        ping(config.healthcheck_url, '/fail', error)
+    else:
+        ping(config.healthcheck_url)
+    logger.info("Sync finished")
 
 
 def compute_schedule_times(digest_hour: int) -> tuple[str, str]:
@@ -39,12 +55,7 @@ def main() -> None:
     client = MinifluxClient(config.miniflux_base_url, config.miniflux_api_key)
 
     def job() -> None:
-        logger.info("Sync started")
-        try:
-            run_sync(client, config)
-        except Exception as exc:
-            logger.error("Sync cycle failed: %s", exc)
-        logger.info("Sync finished")
+        run_job(client, config)
 
     if config.run_on_startup:
         job()

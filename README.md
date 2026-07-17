@@ -75,6 +75,17 @@ All configuration is via environment variables.
 | `DIGEST_HOUR` | no | `6` | Hour of day (0–23) to send the digest, in `TIMEZONE` |
 | `TIMEZONE` | no | `UTC` | IANA timezone name, e.g. `America/Chicago` |
 | `RUN_ON_STARTUP` | no | `true` | Also send a digest immediately when the container starts |
+| `HEALTHCHECK_URL` | no | — | [healthchecks.io](https://healthchecks.io) ping URL, e.g. `https://hc-ping.com/<uuid>` |
+
+## Monitoring
+
+If `HEALTHCHECK_URL` is set, each digest cycle pings healthchecks.io: `/start`
+when the cycle begins, the bare URL on success (a day with no unread entries
+counts as success), and `/fail` with the error message in the request body on
+failure. Configure the check with a cron schedule matching `DIGEST_HOUR` in
+your `TIMEZONE` (e.g. `0 6 * * *`) and a grace period of ~30 minutes. Failed
+sends are retried twice (after 1 and 5 minutes) before the cycle is counted
+as failed; entries are never marked read unless the email went out.
 
 Feed IDs are visible in the URL when you open a feed in the Miniflux web UI
 (`/feed/123/entries`).

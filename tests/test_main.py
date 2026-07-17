@@ -6,7 +6,7 @@ import schedule
 from unittest.mock import MagicMock, patch
 
 from config import Config, load_config
-from main import compute_schedule_times, setup_schedule
+from main import compute_schedule_times, run_job, setup_schedule
 
 FULL_ENV = {
     'MINIFLUX_BASE_URL': 'http://localhost:8080',
@@ -133,7 +133,20 @@ def test_load_config_raises_on_invalid_run_on_startup():
     assert 'RUN_ON_STARTUP' in str(exc.value)
 
 
-def make_config(digest_hour=6, timezone='America/Chicago'):
+def test_load_config_healthcheck_url_defaults_to_none():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config.healthcheck_url is None
+
+
+def test_load_config_reads_healthcheck_url():
+    env = {**FULL_ENV, 'HEALTHCHECK_URL': 'https://hc-ping.com/uuid/'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.healthcheck_url == 'https://hc-ping.com/uuid'
+
+
+def make_config(digest_hour=6, timezone='America/Chicago', healthcheck_url=None):
     return Config(
         miniflux_base_url='http://miniflux.lan:8080',
         miniflux_api_key='mk',
@@ -143,7 +156,41 @@ def make_config(digest_hour=6, timezone='America/Chicago'):
         kindle_email='k@kindle.com',
         digest_hour=digest_hour,
         timezone=timezone,
+        healthcheck_url=healthcheck_url,
     )
+
+
+HC_URL = 'https://hc-ping.com/uuid'
+
+
+def ping_calls(mock_ping):
+    return [c.args for c in mock_ping.call_args_list]
+
+
+def test_run_job_pings_start_then_success():
+    config = make_config(healthcheck_url=HC_URL)
+    with patch('main.run_sync', return_value=None), patch('main.ping') as mock_ping:
+        run_job(MagicMock(), config)
+    assert ping_calls(mock_ping) == [(HC_URL, '/start'), (HC_URL,)]
+
+
+def test_run_job_pings_fail_with_error_message():
+    config = make_config(healthcheck_url=HC_URL)
+    with patch('main.run_sync', return_value='Email send failed: timed out'), \
+         patch('main.ping') as mock_ping:
+        run_job(MagicMock(), config)
+    assert ping_calls(mock_ping) == [
+        (HC_URL, '/start'),
+        (HC_URL, '/fail', 'Email send failed: timed out'),
+    ]
+
+
+def test_run_job_pings_fail_on_unexpected_exception():
+    config = make_config(healthcheck_url=HC_URL)
+    with patch('main.run_sync', side_effect=RuntimeError('boom')), \
+         patch('main.ping') as mock_ping:
+        run_job(MagicMock(), config)
+    assert (HC_URL, '/fail', 'boom') in ping_calls(mock_ping)
 
 
 def test_compute_schedule_times_refresh_three_minutes_before_digest():

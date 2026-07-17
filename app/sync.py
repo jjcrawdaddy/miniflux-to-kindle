@@ -19,18 +19,23 @@ def refresh_feeds(client: MinifluxClient, feed_ids: list[int]) -> None:
     logger.info("Refreshed %d feeds", len(feed_ids))
 
 
-def run_sync(client: MinifluxClient, config: Config) -> None:
+def run_sync(client: MinifluxClient, config: Config) -> str | None:
+    """Run one digest cycle. Returns None on success, an error summary on failure."""
     all_entries = []
+    fetch_errors = []
 
     for feed_id in config.feed_ids:
         try:
             all_entries.extend(client.get_unread_entries(feed_id))
         except Exception as exc:
             logger.error("Failed to fetch feed %d: %s", feed_id, exc)
+            fetch_errors.append(f'feed {feed_id}: {exc}')
 
     if not all_entries:
+        if fetch_errors:
+            return f"No entries and fetches failed — {'; '.join(fetch_errors)}"
         logger.info("No unread entries, skipping digest")
-        return
+        return None
 
     logger.info("Fetched %d entries across %d feeds", len(all_entries), len(config.feed_ids))
 
@@ -45,7 +50,7 @@ def run_sync(client: MinifluxClient, config: Config) -> None:
         )
     except Exception as exc:
         logger.error("EPUB build failed: %s", exc)
-        return
+        return f'EPUB build failed: {exc}'
 
     size_mb = len(epub_bytes) / 1024 / 1024
     logger.info("EPUB size: %.1f MB", size_mb)
@@ -58,7 +63,7 @@ def run_sync(client: MinifluxClient, config: Config) -> None:
         logger.info("Sent digest: %s", filename)
     except Exception as exc:
         logger.error("Email send failed, entries not marked read: %s", exc)
-        return
+        return f'Email send failed: {exc}'
 
     all_ids = [e['id'] for e in all_entries]
     try:
@@ -66,3 +71,5 @@ def run_sync(client: MinifluxClient, config: Config) -> None:
         logger.info("Marked %d entries as read", len(all_ids))
     except Exception as exc:
         logger.error("Failed to mark entries as read: %s", exc)
+        return f'Digest sent, but marking entries read failed (expect duplicates): {exc}'
+    return None

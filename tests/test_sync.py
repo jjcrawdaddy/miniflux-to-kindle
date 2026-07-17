@@ -159,6 +159,64 @@ def test_run_sync_uses_configured_timezone_for_digest_date():
     assert filenames['Etc/GMT-14'] != filenames['Etc/GMT+12']
 
 
+def test_run_sync_returns_none_on_success():
+    client = make_client({55: make_entries()})
+
+    with patch('sync.build_epub', return_value=b'epub'), patch('sync.send_epub'):
+        assert run_sync(client, make_config()) is None
+
+
+def test_run_sync_returns_none_when_no_entries():
+    # A quiet day is a success — it must not trigger a monitoring alert
+    client = make_client({55: []})
+
+    with patch('sync.build_epub'), patch('sync.send_epub'):
+        assert run_sync(client, make_config()) is None
+
+
+def test_run_sync_returns_error_on_send_failure():
+    client = make_client({55: make_entries()})
+
+    with patch('sync.build_epub', return_value=b'epub'), \
+         patch('sync.send_epub', side_effect=Exception('SMTP timed out')):
+        error = run_sync(client, make_config())
+
+    assert error is not None and 'SMTP timed out' in error
+
+
+def test_run_sync_returns_error_on_epub_failure():
+    client = make_client({55: make_entries()})
+
+    with patch('sync.build_epub', side_effect=Exception('bad HTML')), \
+         patch('sync.send_epub'):
+        error = run_sync(client, make_config())
+
+    assert error is not None and 'bad HTML' in error
+
+
+def test_run_sync_returns_error_when_all_feeds_fail():
+    # "No entries" because every fetch failed is an outage, not a quiet day
+    client = MagicMock()
+    client.hostname = 'miniflux.lan'
+    client.get_unread_entries.side_effect = Exception('Connection refused')
+
+    with patch('sync.build_epub'), patch('sync.send_epub'):
+        error = run_sync(client, make_config(feed_ids=(55, 12)))
+
+    assert error is not None and 'Connection refused' in error
+
+
+def test_run_sync_returns_error_on_mark_read_failure():
+    # Digest was sent, but unmarked entries mean duplicates tomorrow — alert
+    client = make_client({55: make_entries()})
+    client.mark_entries_read.side_effect = Exception('Miniflux unavailable')
+
+    with patch('sync.build_epub', return_value=b'epub'), patch('sync.send_epub'):
+        error = run_sync(client, make_config())
+
+    assert error is not None and 'Miniflux unavailable' in error
+
+
 def test_refresh_feeds_refreshes_all_feed_ids():
     client = MagicMock()
     refresh_feeds(client, [55, 12])
