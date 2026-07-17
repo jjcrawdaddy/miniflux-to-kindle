@@ -16,9 +16,10 @@ A single long-running container:
    fetched from each feed (up to 100 per feed per day; anything beyond that
    rolls over to the next digest).
 3. Entries are assembled into `digest-YYYY-MM-DD.epub`, ordered by the feed
-   order you configured, then by publish date. Images are downloaded and
-   embedded (capped at 5 MB each); HTML is sanitized (scripts, event handlers,
-   unsafe link schemes, and SVG images are stripped).
+   order you configured, then by publish date. Images are downloaded (capped
+   at 5 MB each), downscaled to at most 1200 px and re-encoded as JPEG when
+   that makes them smaller, then embedded; HTML is sanitized (scripts, event
+   handlers, unsafe link schemes, and SVG images are stripped).
 4. The EPUB is emailed to your Kindle address through Gmail SMTP.
 5. On success, all included entries are marked read in Miniflux.
 

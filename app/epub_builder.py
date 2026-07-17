@@ -1,5 +1,6 @@
 import hashlib
 import html
+import io
 import ipaddress
 import os
 import socket
@@ -10,9 +11,12 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from ebooklib import epub
+from PIL import Image
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 3
+MAX_IMAGE_DIMENSION = 1200
+JPEG_QUALITY = 75
 
 _MEDIA_TYPE_TO_EXT = {
     'image/jpeg': 'jpg',
@@ -60,6 +64,29 @@ def _fetch_image(src: str, allowed_hosts: frozenset) -> requests.Response | None
         resp.raise_for_status()
         return resp
     return None
+
+
+def _recompress_image(image_data: bytes, media_type: str) -> tuple[bytes, str]:
+    # E-reader screens don't need multi-megabyte photos: downscale and
+    # re-encode as JPEG, but only keep the result if it's actually smaller
+    try:
+        img = Image.open(io.BytesIO(image_data))
+        img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
+        if img.mode in ('RGBA', 'LA', 'PA') or (img.mode == 'P' and 'transparency' in img.info):
+            rgba = img.convert('RGBA')
+            flat = Image.new('RGB', rgba.size, 'white')
+            flat.paste(rgba, mask=rgba.getchannel('A'))
+            img = flat
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=JPEG_QUALITY, optimize=True)
+        recompressed = buf.getvalue()
+    except Exception:
+        return image_data, media_type
+    if len(recompressed) < len(image_data):
+        return recompressed, 'image/jpeg'
+    return image_data, media_type
 
 
 def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: frozenset = frozenset()) -> str:
@@ -114,7 +141,7 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: 
             if size > MAX_IMAGE_BYTES:
                 img.decompose()
                 continue
-            image_data = b''.join(chunks)
+            image_data, media_type = _recompress_image(b''.join(chunks), media_type)
             ext = _MEDIA_TYPE_TO_EXT.get(media_type) or os.path.splitext(urlparse(src).path)[1].lstrip('.').lower() or 'jpg'
             img_name = f'images/img_{hashlib.md5(src.encode()).hexdigest()[:8]}.{ext}'
             epub_img = epub.EpubImage()

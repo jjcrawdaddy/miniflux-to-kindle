@@ -3,4 +3,5 @@ ebooklib==0.18
 schedule==1.2.2
 pytz==2026.2
 beautifulsoup4==4.12.3
+Pillow==12.3.0
 tzdata==2026.2

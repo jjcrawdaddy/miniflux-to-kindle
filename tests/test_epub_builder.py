@@ -3,7 +3,15 @@ import socket
 import zipfile
 from unittest.mock import MagicMock, patch
 
-from epub_builder import build_epub, _fetch_image, _is_public_url
+from PIL import Image
+
+from epub_builder import (
+    MAX_IMAGE_DIMENSION,
+    build_epub,
+    _fetch_image,
+    _is_public_url,
+    _recompress_image,
+)
 
 ENTRIES = [
     {
@@ -233,6 +241,85 @@ def test_build_epub_rejects_svg_images():
         image_files = [n for n in zf.namelist() if 'images/' in n]
     assert not image_files
     assert '<img' not in read_article(result)
+
+
+def make_image_bytes(width, height, format='JPEG', mode='RGB', noisy=False):
+    img = Image.new(mode, (width, height), 'red')
+    if noisy:
+        # Per-pixel noise defeats compression, guaranteeing a "large" image
+        import random
+        rnd = random.Random(0)
+        img.putdata([tuple(rnd.randrange(256) for _ in img.getbands())
+                     for _ in range(width * height)])
+    buf = io.BytesIO()
+    img.save(buf, format=format)
+    return buf.getvalue()
+
+
+def test_recompress_downscales_oversized_images():
+    data = make_image_bytes(MAX_IMAGE_DIMENSION * 2, MAX_IMAGE_DIMENSION)
+    out, media_type = _recompress_image(data, 'image/jpeg')
+    img = Image.open(io.BytesIO(out))
+    assert max(img.size) <= MAX_IMAGE_DIMENSION
+    assert media_type == 'image/jpeg'
+
+
+def test_recompress_preserves_aspect_ratio():
+    data = make_image_bytes(MAX_IMAGE_DIMENSION * 4, MAX_IMAGE_DIMENSION * 2)
+    out, _ = _recompress_image(data, 'image/jpeg')
+    w, h = Image.open(io.BytesIO(out)).size
+    assert w == 2 * h
+
+
+def test_recompress_converts_bulky_png_to_smaller_jpeg():
+    data = make_image_bytes(800, 600, format='PNG', noisy=True)
+    out, media_type = _recompress_image(data, 'image/png')
+    assert len(out) < len(data)
+    assert media_type == 'image/jpeg'
+    assert Image.open(io.BytesIO(out)).format == 'JPEG'
+
+
+def test_recompress_keeps_original_when_no_gain():
+    # A 1x1 PNG is smaller than any JPEG encoding of it
+    data = make_image_bytes(1, 1, format='PNG')
+    out, media_type = _recompress_image(data, 'image/png')
+    assert out == data
+    assert media_type == 'image/png'
+
+
+def test_recompress_flattens_transparency_onto_white():
+    img = Image.new('RGBA', (2000, 2000), (255, 0, 0, 0))  # fully transparent
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    out, _ = _recompress_image(buf.getvalue(), 'image/png')
+    result = Image.open(io.BytesIO(out)).convert('RGB')
+    r, g, b = result.getpixel((0, 0))
+    assert (r, g, b) == (255, 255, 255)
+
+
+def test_recompress_keeps_original_on_undecodable_data():
+    data = b'not an image at all'
+    out, media_type = _recompress_image(data, 'image/jpeg')
+    assert out == data
+    assert media_type == 'image/jpeg'
+
+
+def test_build_epub_recompresses_embedded_images():
+    big = make_image_bytes(MAX_IMAGE_DIMENSION * 2, MAX_IMAGE_DIMENSION * 2, noisy=True)
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<p><img src="http://ex.com/img.jpg" /></p>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get', return_value=make_img_mock(content=big)):
+        result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        image_files = [n for n in zf.namelist() if 'images/' in n]
+        assert image_files
+        stored = zf.read(image_files[0])
+    assert len(stored) < len(big)
+    assert max(Image.open(io.BytesIO(stored)).size) <= MAX_IMAGE_DIMENSION
 
 
 def test_is_public_url_allows_global_address():
