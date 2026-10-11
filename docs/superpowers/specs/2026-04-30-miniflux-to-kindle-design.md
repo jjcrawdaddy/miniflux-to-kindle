@@ -96,3 +96,7 @@ Email delivery uses Python's built-in `smtplib` and `email` modules — no extra
 - Delivery via anything other than Gmail SMTP
 - Multiple recipient addresses
 - Retry backoff for email failures
+
+> **Note:** Per-category EPUB grouping and generic SMTP delivery (previously
+> listed here as out of scope) are implemented in
+> `2026-10-10-smtp-categories-design.md`.

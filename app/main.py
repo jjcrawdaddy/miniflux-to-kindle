@@ -51,7 +51,7 @@ def setup_schedule(config: Config, client: MinifluxClient, job: Callable[[], Non
     # keeps the digest at the same local hour across DST transitions
     digest_time, refresh_time = compute_schedule_times(config.digest_hour)
     schedule.every().day.at(refresh_time, config.timezone).do(
-        lambda: refresh_feeds(client, config.feed_ids)
+        lambda: refresh_feeds(client, config.feed_ids, config.category_ids)
     )
     schedule.every().day.at(digest_time, config.timezone).do(job)
     logger.info(

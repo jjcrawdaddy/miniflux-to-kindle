@@ -1,7 +1,5 @@
 venv/
-tests/
 docs/
-requirements-dev.txt
 .env
 .pytest_cache/
 __pycache__/

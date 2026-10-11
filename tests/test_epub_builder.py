@@ -129,6 +129,70 @@ def test_build_epub_sorts_by_feed_id_order_then_date():
     assert 'Feed200 Late' in second_text
 
 
+def make_categorized_entry(entry_id, title, category, feed_id=None,
+                           published_at='2026-04-30T08:00:00+00:00'):
+    entry = {
+        'id': entry_id,
+        'title': title,
+        'url': f'http://ex.com/{entry_id}',
+        'content': '<p>Content</p>',
+        'published_at': published_at,
+    }
+    if feed_id is not None:
+        entry['feed_id'] = feed_id
+    if category is not None:
+        entry['feed'] = {'category': category}
+    return entry
+
+
+def read_named_file(epub_bytes, suffix):
+    with zipfile.ZipFile(io.BytesIO(epub_bytes)) as zf:
+        name = [n for n in zf.namelist() if n.endswith(suffix)][0]
+        return zf.read(name).decode('utf-8', errors='ignore')
+
+
+def test_build_epub_groups_entries_by_category_with_headers():
+    entries = [
+        make_categorized_entry(1, 'News A', {'id': 10, 'title': 'News'}),
+        make_categorized_entry(2, 'Tech A', {'id': 20, 'title': 'Tech'}),
+        make_categorized_entry(3, 'News B', {'id': 10, 'title': 'News'}),
+    ]
+    result = build_epub(entries, '2026-04-30')
+    assert 'News' in read_named_file(result, 'section_0000.xhtml')
+    assert 'Tech' in read_named_file(result, 'section_0001.xhtml')
+    assert 'News A' in read_named_file(result, 'article_0000.xhtml')
+    assert 'News B' in read_named_file(result, 'article_0001.xhtml')
+    assert 'Tech A' in read_named_file(result, 'article_0002.xhtml')
+
+
+def test_build_epub_orders_categories_by_category_ids():
+    entries = [
+        make_categorized_entry(1, 'Tech A', {'id': 20, 'title': 'Tech'}),
+        make_categorized_entry(2, 'News A', {'id': 10, 'title': 'News'}),
+    ]
+    result = build_epub(entries, '2026-04-30', category_ids=[10, 20])
+    assert 'News' in read_named_file(result, 'section_0000.xhtml')
+    assert 'News A' in read_named_file(result, 'article_0000.xhtml')
+    assert 'Tech A' in read_named_file(result, 'article_0001.xhtml')
+
+
+def test_build_epub_uses_uncategorized_for_missing_category():
+    entries = [make_categorized_entry(1, 'Lonely', None)]
+    result = build_epub(entries, '2026-04-30')
+    assert 'Uncategorized' in read_named_file(result, 'section_0000.xhtml')
+    assert 'Lonely' in read_named_file(result, 'article_0000.xhtml')
+
+
+def test_build_epub_toc_includes_category_titles():
+    entries = [make_categorized_entry(1, 'Headline', {'id': 10, 'title': 'News'})]
+    result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        nav = [n for n in zf.namelist() if n.endswith('.ncx')][0]
+        ncx_text = zf.read(nav).decode('utf-8', errors='ignore')
+    assert 'News' in ncx_text
+    assert 'Headline' in ncx_text
+
+
 def make_img_mock(content_type='image/jpeg', content=b'\xff\xd8\xff'):
     m = MagicMock()
     m.headers = {'Content-Type': content_type, 'Content-Length': str(len(content))}
@@ -329,6 +393,38 @@ def test_recompress_keeps_original_when_no_gain():
     out, media_type = _recompress_image(data, 'image/png')
     assert out == data
     assert media_type == 'image/png'
+
+
+def test_recompress_converts_webp_to_jpeg_even_when_larger():
+    # Kindle can't render WebP, so it must become JPEG regardless of size
+    data = make_image_bytes(50, 50, format='WEBP', noisy=True)
+    out, media_type = _recompress_image(data, 'image/webp')
+    assert media_type == 'image/jpeg'
+    assert Image.open(io.BytesIO(out)).format == 'JPEG'
+
+
+def test_recompress_converts_bmp_to_jpeg():
+    data = make_image_bytes(50, 50, format='BMP', noisy=True)
+    out, media_type = _recompress_image(data, 'image/bmp')
+    assert media_type == 'image/jpeg'
+    assert Image.open(io.BytesIO(out)).format == 'JPEG'
+
+
+def test_build_epub_converts_embedded_webp_to_jpeg():
+    webp = make_image_bytes(60, 60, format='WEBP', noisy=True)
+    entries = [{
+        'id': 1, 'title': 'A', 'url': 'http://ex.com/1',
+        'content': '<p><img src="http://ex.com/img.webp" /></p>',
+        'published_at': '2026-04-30T08:00:00+00:00',
+    }]
+    with patch('epub_builder._is_public_url', return_value=True), \
+         patch('epub_builder.requests.get', return_value=make_img_mock(content_type='image/webp', content=webp)):
+        result = build_epub(entries, '2026-04-30')
+    with zipfile.ZipFile(io.BytesIO(result)) as zf:
+        image_files = [n for n in zf.namelist() if 'images/' in n]
+        assert image_files
+        assert image_files[0].endswith('.jpg')
+        assert Image.open(io.BytesIO(zf.read(image_files[0]))).format == 'JPEG'
 
 
 def test_recompress_flattens_transparency_onto_white():

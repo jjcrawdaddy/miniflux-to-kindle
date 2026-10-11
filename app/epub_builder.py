@@ -29,6 +29,10 @@ _MEDIA_TYPE_TO_EXT = {
 
 _SAFE_LINK_SCHEMES = ('', 'http', 'https', 'mailto')
 
+# Image formats the Kindle renderer can display. Anything else (WebP, BMP,
+# AVIF, ...) is converted to JPEG, or dropped if that conversion fails.
+_KINDLE_SAFE_IMAGE_TYPES = frozenset({'image/jpeg', 'image/jpg', 'image/png', 'image/gif'})
+
 
 def _is_public_url(url: str, allowed_hosts: frozenset = frozenset()) -> bool:
     hostname = urlparse(url).hostname
@@ -84,7 +88,9 @@ def _recompress_image(image_data: bytes, media_type: str) -> tuple[bytes, str]:
         recompressed = buf.getvalue()
     except Exception:
         return image_data, media_type
-    if len(recompressed) < len(image_data):
+    # Kindle can't render WebP/BMP/etc., so always convert those to JPEG. For
+    # formats it understands, only switch to JPEG when recompression saves space.
+    if media_type not in _KINDLE_SAFE_IMAGE_TYPES or len(recompressed) < len(image_data):
         return recompressed, 'image/jpeg'
     return image_data, media_type
 
@@ -184,6 +190,12 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: 
                 img.decompose()
                 continue
             image_data, media_type = _recompress_image(b''.join(chunks), media_type)
+            if media_type not in _KINDLE_SAFE_IMAGE_TYPES:
+                # Decoding/transcoding failed and the original format isn't
+                # something the Kindle can display — drop it rather than embed
+                # an image that may crash the reader.
+                img.decompose()
+                continue
             ext = _MEDIA_TYPE_TO_EXT.get(media_type) or os.path.splitext(urlparse(src).path)[1].lstrip('.').lower() or 'jpg'
             img_name = f'images/img_{hashlib.md5(src.encode()).hexdigest()[:8]}.{ext}'
             epub_img = epub.EpubImage()
@@ -198,53 +210,102 @@ def _embed_images(book: epub.EpubBook, content: str, seen: dict, allowed_hosts: 
     return str(soup)
 
 
+def _category_of(entry: dict) -> tuple[object, str]:
+    feed = entry.get('feed') or {}
+    category = feed.get('category') or {}
+    cat_id = category.get('id')
+    cat_title = category.get('title')
+    if not cat_title:
+        cat_title = 'Uncategorized'
+    return cat_id, cat_title
+
+
+def _group_by_category(
+    entries: list[dict],
+    feed_ids: list[int] | None,
+    category_ids: list[int] | None,
+) -> list[tuple[str, list[dict]]]:
+    category_order = {cid: i for i, cid in enumerate(category_ids or ())}
+    feed_order = {fid: i for i, fid in enumerate(feed_ids or ())}
+
+    groups: dict[tuple[object, str], list[dict]] = {}
+    for entry in entries:
+        groups.setdefault(_category_of(entry), []).append(entry)
+
+    def group_sort_key(item):
+        (cat_id, cat_title), group_entries = item
+        cat_rank = category_order.get(cat_id, len(category_order))
+        min_feed_rank = min(
+            (feed_order.get(e.get('feed_id'), len(feed_order)) for e in group_entries),
+            default=len(feed_order),
+        )
+        return (cat_rank, min_feed_rank, cat_title.lower())
+
+    result = []
+    for (cat_id, cat_title), group_entries in sorted(groups.items(), key=group_sort_key):
+        ordered = sorted(
+            group_entries,
+            key=lambda e: (
+                feed_order.get(e.get('feed_id'), len(feed_order)),
+                datetime.fromisoformat(e['published_at']),
+            ),
+        )
+        result.append((cat_title, ordered))
+    return result
+
+
 def build_epub(
     entries: list[dict],
     digest_date: str,
     feed_ids: list[int] | None = None,
+    category_ids: list[int] | None = None,
     allowed_hosts: frozenset = frozenset(),
 ) -> bytes:
-    if feed_ids:
-        feed_order = {fid: i for i, fid in enumerate(feed_ids)}
-        entries_sorted = sorted(
-            entries,
-            key=lambda e: (feed_order.get(e.get('feed_id', 0), len(feed_ids)), datetime.fromisoformat(e['published_at']))
-        )
-    else:
-        entries_sorted = sorted(
-            entries,
-            key=lambda e: datetime.fromisoformat(e['published_at'])
-        )
+    grouped = _group_by_category(entries, feed_ids, category_ids)
 
     book = epub.EpubBook()
     book.set_title(f'Daily Digest — {digest_date}')
     book.set_language('en')
 
     chapters = []
-    toc_links = []
+    toc = []
     seen_images: dict = {}
+    article_i = 0
+    section_i = 0
 
-    for i, entry in enumerate(entries_sorted):
-        file_name = f'article_{i:04d}.xhtml'
-        chapter = epub.EpubHtml(title=entry['title'], file_name=file_name, lang='en')
-        embedded_content = _embed_images(book, entry['content'], seen_images, allowed_hosts, entry['url'])
-        safe_title = html.escape(entry['title'])
-        safe_url = html.escape(entry['url'], quote=True)
-        pub_date = datetime.fromisoformat(entry['published_at']).strftime('%B %-d, %Y')
-        byline_parts = [pub_date]
-        if entry.get('author'):
-            byline_parts.insert(0, f'By {html.escape(entry["author"])}')
-        chapter.content = (
-            f'<h1>{safe_title}</h1>'
-            f'<p><em>{" · ".join(byline_parts)}</em></p>'
-            f'<p><a href="{safe_url}">{safe_url}</a></p>'
-            f'{embedded_content}'
-        )
-        book.add_item(chapter)
-        chapters.append(chapter)
-        toc_links.append(epub.Link(file_name, entry['title'], f'article_{i:04d}'))
+    for cat_title, cat_entries in grouped:
+        header_file = f'section_{section_i:04d}.xhtml'
+        section_i += 1
+        header = epub.EpubHtml(title=cat_title, file_name=header_file, lang='en')
+        header.content = f'<h1>{html.escape(cat_title)}</h1>'
+        book.add_item(header)
+        chapters.append(header)
 
-    book.toc = toc_links
+        section_links = []
+        for entry in cat_entries:
+            file_name = f'article_{article_i:04d}.xhtml'
+            article_i += 1
+            chapter = epub.EpubHtml(title=entry['title'], file_name=file_name, lang='en')
+            embedded_content = _embed_images(book, entry['content'], seen_images, allowed_hosts, entry['url'])
+            safe_title = html.escape(entry['title'])
+            safe_url = html.escape(entry['url'], quote=True)
+            pub_date = datetime.fromisoformat(entry['published_at']).strftime('%B %-d, %Y')
+            byline_parts = [pub_date]
+            if entry.get('author'):
+                byline_parts.insert(0, f'By {html.escape(entry["author"])}')
+            chapter.content = (
+                f'<h1>{safe_title}</h1>'
+                f'<p><em>{" · ".join(byline_parts)}</em></p>'
+                f'<p><a href="{safe_url}">{safe_url}</a></p>'
+                f'{embedded_content}'
+            )
+            book.add_item(chapter)
+            chapters.append(chapter)
+            section_links.append(epub.Link(file_name, entry['title'], f'article_{article_i - 1:04d}'))
+
+        toc.append((epub.Section(cat_title), section_links))
+
+    book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = ['nav'] + chapters

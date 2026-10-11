@@ -5,7 +5,7 @@ import pytest
 import schedule
 from unittest.mock import MagicMock, patch
 
-from config import Config, load_config
+from config import Config, SmtpConfig, load_config
 from main import compute_schedule_times, run_job, setup_schedule
 
 FULL_ENV = {
@@ -24,18 +24,30 @@ def test_load_config_returns_all_values():
     assert config.miniflux_base_url == 'http://localhost:8080'
     assert config.miniflux_api_key == 'mk'
     assert config.feed_ids == (55, 12)
-    assert config.gmail_user == 'user@gmail.com'
-    assert config.gmail_app_password == 'apppass'
+    assert config.category_ids == ()
     assert config.kindle_email == 'kindle@kindle.com'
     assert config.digest_hour == 6
     assert config.timezone == 'UTC'
+
+
+def test_load_config_uses_gmail_fallback_for_smtp():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config.smtp.host == 'smtp.gmail.com'
+    assert config.smtp.port == 587
+    assert config.smtp.user == 'user@gmail.com'
+    assert config.smtp.password == 'apppass'
+    assert config.smtp.from_address == 'user@gmail.com'
+    assert config.smtp.security == 'starttls'
 
 
 def test_load_config_is_immutable():
     with patch.dict(os.environ, FULL_ENV, clear=True):
         config = load_config()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        config.gmail_user = 'other@gmail.com'
+        config.smtp.host = 'other.example.com'
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.kindle_email = 'other@kindle.com'
 
 
 def test_load_config_parses_feed_ids_as_int_tuple():
@@ -43,6 +55,21 @@ def test_load_config_parses_feed_ids_as_int_tuple():
         config = load_config()
     assert isinstance(config.feed_ids, tuple)
     assert all(isinstance(x, int) for x in config.feed_ids)
+
+
+def test_load_config_parses_category_ids():
+    env = {**FULL_ENV, 'MINIFLUX_CATEGORY_IDS': '7, 8'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.category_ids == (7, 8)
+
+
+def test_load_config_allows_categories_instead_of_feeds():
+    env = {**FULL_ENV, 'MINIFLUX_FEED_IDS': '', 'MINIFLUX_CATEGORY_IDS': '3'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.feed_ids == ()
+    assert config.category_ids == (3,)
 
 
 def test_load_config_uses_custom_digest_hour():
@@ -59,6 +86,22 @@ def test_load_config_raises_on_missing_vars():
     assert 'MINIFLUX_BASE_URL' in str(exc.value)
 
 
+def test_load_config_raises_on_missing_smtp_credentials():
+    env = {**FULL_ENV, 'GMAIL_USER': '', 'GMAIL_APP_PASSWORD': ''}
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'SMTP credentials' in str(exc.value)
+
+
+def test_load_config_raises_when_no_sources():
+    bad = {**FULL_ENV, 'MINIFLUX_FEED_IDS': '', 'MINIFLUX_CATEGORY_IDS': ''}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'MINIFLUX_FEED_IDS' in str(exc.value) and 'MINIFLUX_CATEGORY_IDS' in str(exc.value)
+
+
 def test_load_config_raises_on_invalid_feed_ids():
     bad = {**FULL_ENV, 'MINIFLUX_FEED_IDS': 'abc,def'}
     with patch.dict(os.environ, bad, clear=True):
@@ -67,12 +110,12 @@ def test_load_config_raises_on_invalid_feed_ids():
     assert 'MINIFLUX_FEED_IDS' in str(exc.value)
 
 
-def test_load_config_raises_on_empty_feed_ids():
-    bad = {**FULL_ENV, 'MINIFLUX_FEED_IDS': '   '}
+def test_load_config_raises_on_invalid_category_ids():
+    bad = {**FULL_ENV, 'MINIFLUX_CATEGORY_IDS': 'abc'}
     with patch.dict(os.environ, bad, clear=True):
         with pytest.raises(SystemExit) as exc:
             load_config()
-    assert 'MINIFLUX_FEED_IDS' in str(exc.value)
+    assert 'MINIFLUX_CATEGORY_IDS' in str(exc.value)
 
 
 def test_load_config_raises_on_out_of_range_digest_hour():
@@ -133,6 +176,27 @@ def test_load_config_raises_on_invalid_run_on_startup():
     assert 'RUN_ON_STARTUP' in str(exc.value)
 
 
+def test_load_config_mark_as_read_defaults_true():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config.mark_as_read is True
+
+
+def test_load_config_mark_as_read_false():
+    env = {**FULL_ENV, 'MARK_AS_READ': 'false'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.mark_as_read is False
+
+
+def test_load_config_raises_on_invalid_mark_as_read():
+    bad = {**FULL_ENV, 'MARK_AS_READ': 'sometimes'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'MARK_AS_READ' in str(exc.value)
+
+
 def test_load_config_healthcheck_url_defaults_to_none():
     with patch.dict(os.environ, FULL_ENV, clear=True):
         config = load_config()
@@ -146,13 +210,73 @@ def test_load_config_reads_healthcheck_url():
     assert config.healthcheck_url == 'https://hc-ping.com/uuid'
 
 
+def test_load_config_smtp_overrides_gmail():
+    env = {
+        **FULL_ENV,
+        'SMTP_HOST': 'smtp.fastmail.com',
+        'SMTP_PORT': '465',
+        'SMTP_USER': 'me@fastmail.com',
+        'SMTP_PASSWORD': 'fm-pass',
+        'SMTP_FROM': 'digest@fastmail.com',
+        'SMTP_SECURITY': 'ssl',
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.smtp.host == 'smtp.fastmail.com'
+    assert config.smtp.port == 465
+    assert config.smtp.user == 'me@fastmail.com'
+    assert config.smtp.password == 'fm-pass'
+    assert config.smtp.from_address == 'digest@fastmail.com'
+    assert config.smtp.security == 'ssl'
+
+
+def test_load_config_raises_on_invalid_smtp_port():
+    bad = {**FULL_ENV, 'SMTP_PORT': '70000'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'SMTP_PORT' in str(exc.value)
+
+
+def test_load_config_raises_on_invalid_smtp_security():
+    bad = {**FULL_ENV, 'SMTP_SECURITY': 'tls1.2'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'SMTP_SECURITY' in str(exc.value)
+
+
+def test_load_config_smtp_attachment_mime_defaults_to_epub():
+    with patch.dict(os.environ, FULL_ENV, clear=True):
+        config = load_config()
+    assert config.smtp.attachment_mime == ('application/epub+zip',)
+
+
+def test_load_config_smtp_attachment_mime_accepts_list():
+    env = {**FULL_ENV, 'SMTP_ATTACHMENT_MIME': 'application/xml, application/octet-stream'}
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+    assert config.smtp.attachment_mime == ('application/xml', 'application/octet-stream')
+
+
+def test_load_config_raises_on_invalid_smtp_attachment_mime():
+    bad = {**FULL_ENV, 'SMTP_ATTACHMENT_MIME': 'applicationepub'}
+    with patch.dict(os.environ, bad, clear=True):
+        with pytest.raises(SystemExit) as exc:
+            load_config()
+    assert 'SMTP_ATTACHMENT_MIME' in str(exc.value)
+
+
 def make_config(digest_hour=6, timezone='America/Chicago', healthcheck_url=None):
     return Config(
         miniflux_base_url='http://miniflux.lan:8080',
         miniflux_api_key='mk',
         feed_ids=(55,),
-        gmail_user='u@gmail.com',
-        gmail_app_password='pass',
+        category_ids=(),
+        smtp=SmtpConfig(
+            host='smtp.gmail.com', port=587, user='u@gmail.com',
+            password='pass', from_address='u@gmail.com', security='starttls',
+        ),
         kindle_email='k@kindle.com',
         digest_hour=digest_hour,
         timezone=timezone,

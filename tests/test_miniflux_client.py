@@ -54,6 +54,39 @@ def test_get_unread_entries_strips_trailing_slash():
     assert args[0] == 'http://localhost:8080/v1/feeds/55/entries'
 
 
+def test_get_unread_entries_passes_published_window():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {'total': 0, 'entries': []}
+    client.session.get = MagicMock(return_value=mock_resp)
+
+    client.get_unread_entries(55, published_after=1700000000, published_before=1700086400)
+
+    client.session.get.assert_called_once_with(
+        'http://localhost:8080/v1/feeds/55/entries',
+        params={
+            'status': 'unread', 'limit': 100,
+            'published_after': 1700000000, 'published_before': 1700086400,
+        },
+        timeout=30,
+    )
+
+
+def test_get_unread_entries_omits_window_when_not_provided():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {'total': 0, 'entries': []}
+    client.session.get = MagicMock(return_value=mock_resp)
+
+    client.get_unread_entries(55)
+
+    client.session.get.assert_called_once_with(
+        'http://localhost:8080/v1/feeds/55/entries',
+        params={'status': 'unread', 'limit': 100},
+        timeout=30,
+    )
+
+
 def test_mark_entries_read_sends_correct_request():
     client = make_client()
     mock_resp = MagicMock()
@@ -92,6 +125,70 @@ def test_refresh_feed_sends_correct_request():
     mock_resp.raise_for_status.assert_called_once()
 
 
+def test_get_category_entries_returns_entries():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        'total': 1,
+        'entries': [
+            {'id': 1, 'title': 'A1', 'url': 'http://ex.com/1', 'content': '<p>One</p>',
+             'published_at': '2026-04-30T08:00:00+00:00'},
+        ]
+    }
+    client.session.get = MagicMock(return_value=mock_resp)
+
+    entries = client.get_category_entries(7)
+
+    client.session.get.assert_called_once_with(
+        'http://localhost:8080/v1/categories/7/entries',
+        params={'status': 'unread', 'limit': 100},
+        timeout=30,
+    )
+    assert len(entries) == 1
+    mock_resp.raise_for_status.assert_called_once()
+
+
+def test_get_category_entries_passes_published_window():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {'total': 0, 'entries': []}
+    client.session.get = MagicMock(return_value=mock_resp)
+
+    client.get_category_entries(7, published_after=1700000000, published_before=1700086400)
+
+    client.session.get.assert_called_once_with(
+        'http://localhost:8080/v1/categories/7/entries',
+        params={
+            'status': 'unread', 'limit': 100,
+            'published_after': 1700000000, 'published_before': 1700086400,
+        },
+        timeout=30,
+    )
+
+
+def test_get_category_entries_returns_empty_list_when_none():
+    client = make_client()
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {'total': 0, 'entries': []}
+    client.session.get = MagicMock(return_value=mock_resp)
+
+    assert client.get_category_entries(7) == []
+
+
+def test_refresh_category_sends_correct_request():
+    client = make_client()
+    mock_resp = MagicMock()
+    client.session.put = MagicMock(return_value=mock_resp)
+
+    client.refresh_category(7)
+
+    client.session.put.assert_called_once_with(
+        'http://localhost:8080/v1/categories/7/refresh',
+        timeout=30,
+    )
+    mock_resp.raise_for_status.assert_called_once()
+
+
 def test_all_requests_include_timeout():
     client = make_client()
     mock_resp = MagicMock()
@@ -100,8 +197,10 @@ def test_all_requests_include_timeout():
     client.session.put = MagicMock(return_value=MagicMock())
 
     client.get_unread_entries(55)
+    client.get_category_entries(7)
     client.mark_entries_read([1])
     client.refresh_feed(55)
+    client.refresh_category(7)
 
     assert client.session.get.call_args.kwargs['timeout'] == 30
     for call in client.session.put.call_args_list:
